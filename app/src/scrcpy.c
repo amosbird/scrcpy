@@ -102,7 +102,7 @@ static SDL_bool event_loop(void) {
             case SDL_TEXTINPUT:
                 input_manager_process_text_input(&input_manager, &event.text);
                 break;
-            case SDL_KEYDOWN:
+            /* case SDL_KEYDOWN: */
             case SDL_KEYUP:
                 input_manager_process_key(&input_manager, &event.key);
                 break;

@@ -149,7 +149,7 @@ void input_manager_process_text_input(struct input_manager *input_manager,
 }
 
 void input_manager_process_key(struct input_manager *input_manager,
-                               const SDL_KeyboardEvent *event) {
+                               SDL_KeyboardEvent *event) {
     SDL_bool ctrl = event->keysym.mod & (KMOD_LCTRL | KMOD_RCTRL);
 
     // capture all Ctrl events
@@ -199,27 +199,27 @@ void input_manager_process_key(struct input_manager *input_manager,
                 action_volume_up(input_manager->controller, action);
                 return;
             case SDLK_v:
-                if (!repeat && event->type == SDL_KEYDOWN) {
+                if (ctrl && !meta && !repeat) {
                     clipboard_paste(input_manager->controller);
                 }
                 return;
             case SDLK_f:
-                if (!repeat && event->type == SDL_KEYDOWN) {
+                if (ctrl && !meta && !repeat) {
                     screen_switch_fullscreen(input_manager->screen);
                 }
                 return;
             case SDLK_x:
-                if (!repeat && event->type == SDL_KEYDOWN) {
+                if (ctrl && !meta && !repeat) {
                     screen_resize_to_fit(input_manager->screen);
                 }
                 return;
             case SDLK_g:
-                if (!repeat && event->type == SDL_KEYDOWN) {
+                if (ctrl && !meta && !repeat) {
                     screen_resize_to_pixel_perfect(input_manager->screen);
                 }
                 return;
             case SDLK_i:
-                if (!repeat && event->type == SDL_KEYDOWN) {
+                if (ctrl && !meta && !repeat) {
                     switch_fps_counter_state(input_manager->frames);
                 }
                 return;
@@ -229,6 +229,13 @@ void input_manager_process_key(struct input_manager *input_manager,
     }
 
     struct control_event control_event;
+    event->type = SDL_KEYDOWN;
+    if (input_key_from_sdl_to_android(event, &control_event)) {
+        if (!controller_push_event(input_manager->controller, &control_event)) {
+            LOGW("Cannot send control event");
+        }
+    }
+    event->type = SDL_KEYUP;
     if (input_key_from_sdl_to_android(event, &control_event)) {
         if (!controller_push_event(input_manager->controller, &control_event)) {
             LOGW("Cannot send control event");

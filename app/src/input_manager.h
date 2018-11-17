@@ -16,7 +16,7 @@ struct input_manager {
 void input_manager_process_text_input(struct input_manager *input_manager,
                                       const SDL_TextInputEvent *event);
 void input_manager_process_key(struct input_manager *input_manager,
-                               const SDL_KeyboardEvent *event);
+                               SDL_KeyboardEvent *event);
 void input_manager_process_mouse_motion(struct input_manager *input_manager,
                                         const SDL_MouseMotionEvent *event);
 void input_manager_process_mouse_button(struct input_manager *input_manager,
