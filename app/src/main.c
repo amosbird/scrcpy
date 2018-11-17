@@ -19,6 +19,8 @@ struct args {
     Uint16 port;
     Uint16 max_size;
     Uint32 bit_rate;
+    uint16_t vid;
+    uint16_t pid;
 };
 
 static void usage(const char *arg0) {
@@ -67,6 +69,9 @@ static void usage(const char *arg0) {
         "\n"
         "    -v, --version\n"
         "        Print the version of scrcpy.\n"
+        "\n"
+        "    -x, --id 18d1:4ee7\n"
+        "        The device id used by virtual HID keyboard manager.\n"
         "\n"
         "Shortcuts:\n"
         "\n"
@@ -204,6 +209,28 @@ static SDL_bool parse_port(char *optarg, Uint16 *port) {
     return SDL_TRUE;
 }
 
+static SDL_bool parse_id(char *optarg, uint16_t *vid, uint16_t *pid) {
+    if (*optarg == '\0') {
+        LOGE("Invalid port parameter is empty");
+        return SDL_FALSE;
+    }
+    uint32_t x;
+    uint32_t y;
+    int ret = sscanf(optarg, "%x:%x", &x, &y);
+    if (ret != 2) {
+        LOGE("Invalid ID: %s", optarg);
+        return SDL_FALSE;
+    }
+    if ((x & ~0xffff) || (y & ~0xffff)) {
+        LOGE("ID out of range: %ud, %ud", x, y);
+        return SDL_FALSE;
+    }
+
+    *vid = (uint16_t) x;
+    *pid = (uint16_t) y;
+    return SDL_TRUE;
+}
+
 static SDL_bool parse_args(struct args *args, int argc, char *argv[]) {
     static const struct option long_options[] = {
         {"bit-rate",     required_argument, NULL, 'b'},
@@ -219,7 +246,7 @@ static SDL_bool parse_args(struct args *args, int argc, char *argv[]) {
         {NULL,           0,                 NULL, 0  },
     };
     int c;
-    while ((c = getopt_long(argc, argv, "b:c:fhm:p:r:s:tv", long_options, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "b:c:fhm:p:r:s:tvx:", long_options, NULL)) != -1) {
         switch (c) {
             case 'b':
                 if (!parse_bit_rate(optarg, &args->bit_rate)) {
@@ -256,6 +283,10 @@ static SDL_bool parse_args(struct args *args, int argc, char *argv[]) {
                 break;
             case 'v':
                 args->version = SDL_TRUE;
+                break;
+            case 'x':
+                if (!parse_id(optarg, &args->vid, &args->pid))
+                    return SDL_FALSE;
                 break;
             default:
                 // getopt prints the error message on stderr
@@ -324,6 +355,8 @@ int main(int argc, char *argv[]) {
         .bit_rate = args.bit_rate,
         .show_touches = args.show_touches,
         .fullscreen = args.fullscreen,
+        .vid = args.vid,
+        .pid = args.pid,
     };
     int res = scrcpy(&options) ? 0 : 1;
 

@@ -56,6 +56,9 @@ void control_event_destroy(struct control_event *event) {
     if (event->type == CONTROL_EVENT_TYPE_TEXT) {
         SDL_free(event->text_event.text);
     }
+    if (event->type == CONTROL_EVENT_TYPE_SWIPE) {
+        SDL_free(event->swipe_event.events);
+    }
 }
 
 SDL_bool control_event_queue_is_empty(const struct control_event_queue *queue) {

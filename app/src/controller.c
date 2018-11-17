@@ -71,7 +71,19 @@ static int run_controller(void *data) {
         SDL_assert(non_empty);
         mutex_unlock(controller->mutex);
 
-        SDL_bool ok = process_event(controller, &event);
+        SDL_bool ok = 1;
+        if (event.type == CONTROL_EVENT_TYPE_SWIPE)
+        {
+            for (int i = 0; i < event.swipe_event.num; ++i) {
+                if (i) usleep(event.swipe_event.time);
+                ok = process_event(controller, &event.swipe_event.events[i]);
+                if (!ok) {
+                    break;
+                }
+            }
+        }
+        else
+            ok = process_event(controller, &event);
         control_event_destroy(&event);
         if (!ok) {
             LOGD("Cannot write event to socket");

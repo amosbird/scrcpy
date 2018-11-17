@@ -45,4 +45,6 @@ void server_stop(struct server *server);
 // close and release sockets
 void server_destroy(struct server *server);
 
+void server_paste(struct server * server);
+
 #endif

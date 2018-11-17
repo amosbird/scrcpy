@@ -8,6 +8,7 @@ import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.os.IBinder;
+import android.os.Looper;
 import android.view.Surface;
 
 import java.io.FileDescriptor;
@@ -26,6 +27,8 @@ public class ScreenEncoder implements Device.RotationListener {
     private static final int NO_PTS = -1;
 
     private final AtomicBoolean rotationChanged = new AtomicBoolean();
+    private boolean suspended = true;
+    private final Object lock = new Object[0];
     private final ByteBuffer headerBuffer = ByteBuffer.allocate(12);
 
     private int bitRate;
@@ -54,12 +57,35 @@ public class ScreenEncoder implements Device.RotationListener {
         return rotationChanged.getAndSet(false);
     }
 
+    public final boolean setSuspend(boolean suspended) {
+        synchronized(lock) {
+            this.suspended = suspended;
+            lock.notifyAll();
+        }
+        return true;
+    }
+
+    public final void pollSuspend() {
+        synchronized(lock) {
+            while (suspended) {
+                try {
+                    lock.wait(500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    Ln.d("Suspend waiting is interrupted");
+                }
+            }
+        }
+    }
+
     public void streamScreen(Device device, FileDescriptor fd) throws IOException {
         MediaFormat format = createFormat(bitRate, frameRate, iFrameInterval);
         device.setRotationListener(this);
         boolean alive;
+        Looper.prepare();
         try {
             do {
+                pollSuspend();
                 MediaCodec codec = createCodec();
                 IBinder display = createDisplay();
                 Rect contentRect = device.getScreenInfo().getContentRect();
@@ -92,7 +118,7 @@ public class ScreenEncoder implements Device.RotationListener {
             int outputBufferId = codec.dequeueOutputBuffer(bufferInfo, -1);
             eof = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
             try {
-                if (consumeRotationChange()) {
+                if (consumeRotationChange() || suspended) {
                     // must restart encoding with new size
                     break;
                 }
@@ -151,7 +177,7 @@ public class ScreenEncoder implements Device.RotationListener {
     }
 
     private static IBinder createDisplay() {
-        return SurfaceControl.createDisplay("scrcpy", false);
+        return SurfaceControl.createDisplay("scrcpy", true);
     }
 
     private static void configure(MediaCodec codec, MediaFormat format) {

@@ -5,8 +5,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <SDL2/SDL_assert.h>
+#include <SDL2/SDL_clipboard.h>
 #include <SDL2/SDL_timer.h>
 
+#include "command.h"
 #include "config.h"
 #include "log.h"
 #include "net.h"
@@ -268,4 +270,49 @@ void server_destroy(struct server *server) {
         close_socket(&server->device_socket);
     }
     SDL_free((void *) server->serial);
+}
+
+void server_paste(struct server * server) {
+    const char * cmd[] = {
+        "adb",
+        "shell",
+        "am",
+        "broadcast",
+        "-a",
+        "com.genymobile.gnirehtet.CLIP_SET",
+        "-n",
+        "com.genymobile.gnirehtet/.GnirehtetControlReceiver",
+        "-e",
+        "text",
+        "",
+        ""
+    };
+    process_t process;
+    char* text = SDL_GetClipboardText();
+    int len = 2;
+    for (int i = 0u; text[i]; ++i) {
+        if (text[i] == '"' || text[i] == '\\')
+            len += 2;
+        else
+            len += 1;
+    }
+    char* etext = SDL_malloc(len);
+    int j = 0;
+    etext[j++] = '"';
+    for (int i = 0u; text[i]; ++i) {
+        if (text[i] == '"' || text[i] == '\\')
+            etext[j++] = '\\';
+        etext[j++] = text[i];
+    }
+    --j;
+    while (etext[j] == '\n')
+        --j;
+    etext[++j] = '"';
+    etext[++j] = '\0';
+    cmd[10] = etext;
+    cmd[11] = NULL;
+    cmd_execute(cmd[0], cmd, &process);
+    cmd_simple_wait(process, NULL);
+    SDL_free(text);
+    SDL_free(etext);
 }

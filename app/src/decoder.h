@@ -16,6 +16,7 @@ struct frame_meta {
 
 struct decoder {
     struct frames *frames;
+    struct screen *screen;
     socket_t video_socket;
     SDL_Thread *thread;
     SDL_mutex *mutex;
@@ -27,7 +28,7 @@ struct decoder {
     } receiver_state;
 };
 
-void decoder_init(struct decoder *decoder, struct frames *frames,
+void decoder_init(struct decoder *decoder, struct frames *frames, struct screen *screen,
                   socket_t video_socket, struct recorder *recoder);
 SDL_bool decoder_start(struct decoder *decoder);
 void decoder_stop(struct decoder *decoder);

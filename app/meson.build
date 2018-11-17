@@ -28,6 +28,7 @@ if not get_option('crossbuild_windows')
         dependency('libavcodec'),
         dependency('libavutil'),
         dependency('sdl2'),
+        dependency('libusb-1.0'),
     ]
 
 else

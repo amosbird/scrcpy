@@ -5,6 +5,9 @@
 #include "lock_util.h"
 #include "log.h"
 
+static Uint32 timestamp = 0;
+
+
 // Convert window coordinates (as provided by SDL_GetMouseState() to renderer coordinates (as provided in SDL mouse events)
 //
 // See my question:
@@ -49,6 +52,34 @@ static void send_keycode(struct controller *controller, enum android_keycode key
     }
 }
 
+static inline void action_paste(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_PASTE, actions, "PASTE");
+}
+
+static inline void action_call(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_HEADSETHOOK, actions, "HEADSETHOOK");
+}
+
+static inline void action_pp(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_MEDIA_PLAY_PAUSE, actions, "PLAYPAUSE");
+}
+
+static inline void action_play(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_MEDIA_PLAY, actions, "PLAY");
+}
+
+static inline void action_stop(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_MEDIA_STOP, actions, "STOP");
+}
+
+static inline void action_next(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_MEDIA_NEXT, actions, "NEXT");
+}
+
+static inline void action_prev(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_MEDIA_PREVIOUS, actions, "PREV");
+}
+
 static inline void action_home(struct controller *controller, int actions) {
     send_keycode(controller, AKEYCODE_HOME, actions, "HOME");
 }
@@ -59,6 +90,10 @@ static inline void action_back(struct controller *controller, int actions) {
 
 static inline void action_app_switch(struct controller *controller, int actions) {
     send_keycode(controller, AKEYCODE_APP_SWITCH, actions, "APP_SWITCH");
+}
+
+static inline void action_unlock(struct controller *controller, int actions) {
+    system("unlockphone");
 }
 
 static inline void action_power(struct controller *controller, int actions) {
@@ -121,133 +156,386 @@ static void clipboard_paste(struct controller *controller) {
     }
 }
 
+void input_manager_enable_modifiers(Uint32 time)
+{
+    timestamp = time;
+}
+
 void input_manager_process_text_input(struct input_manager *input_manager,
                                       const SDL_TextInputEvent *event) {
     char c = event->text[0];
-    if (isalpha(c) || c == ' ') {
-        SDL_assert(event->text[1] == '\0');
-        // letters and space are handled as raw key event
+    if (c == 'h' || c == 'j' || c == 'k' || c == 'l')
         return;
-    }
-    struct control_event control_event;
-    control_event.type = CONTROL_EVENT_TYPE_TEXT;
-    control_event.text_event.text = SDL_strdup(event->text);
-    if (!control_event.text_event.text) {
-        LOGW("Cannot strdup input text");
+    const unsigned char * data;
+    data = key_press(c);
+    if (data == hid_keys_null)
         return;
+    if (send_hid_event(input_manager->handle, data, HID_EVENT_SIZE))
+        goto log_err;
+    if (send_hid_event(input_manager->handle, data + 5, HID_EVENT_SIZE))
+        goto log_err;
+    return;
+log_err:
+    LOGW("Cannot send usb key event");
+}
+
+static void swipe(int dir, struct input_manager *input_manager) {
+    struct size screen_size = input_manager->screen->frame_size;
+    static const int steps = 10;
+    struct control_event * tos = SDL_malloc((steps + 2) * sizeof(struct control_event));
+
+    Uint16 xs[steps + 1], ys[steps + 1];
+    if (dir == 0) {
+        for (int i = 0; i <= steps; ++i) {
+            xs[i] = screen_size.width * 7 / 8 - screen_size.width * i / steps / 8;
+            ys[i] = screen_size.height / 2;
+        }
+    } else if (dir == 1) {
+        for (int i = 0; i <= steps; ++i) {
+            xs[i] = screen_size.width / 8 + screen_size.width * i / steps * 7 / 8;
+            ys[i] = screen_size.height / 2;
+        }
+    } else if (dir == 2) {
+        for (int i = 0; i <= steps; ++i) {
+            xs[i] = screen_size.width / 2;
+            ys[i] = screen_size.height * 3 / 4 - screen_size.height * i / steps / 2;
+        }
+    } else if (dir == 3) {
+        for (int i = 0; i <= steps; ++i) {
+            xs[i] = screen_size.width / 2;
+            ys[i] = screen_size.height / 4 + screen_size.height * i / steps / 2;
+        }
     }
-    if (!controller_push_event(input_manager->controller, &control_event)) {
-        SDL_free(control_event.text_event.text);
-        LOGW("Cannot send text event");
+
+    struct control_event to;
+    to.type = CONTROL_EVENT_TYPE_SWIPE;
+    to.swipe_event.events = tos;
+    to.swipe_event.num = steps + 2;
+    to.swipe_event.time = 50000;
+
+    tos[0].type = CONTROL_EVENT_TYPE_MOUSE;
+    tos[0].mouse_event.action = AMOTION_EVENT_ACTION_DOWN;
+    tos[0].mouse_event.buttons = AMOTION_EVENT_BUTTON_PRIMARY;
+    tos[0].mouse_event.position.screen_size = screen_size;
+    tos[0].mouse_event.position.point.x = xs[0];
+    tos[0].mouse_event.position.point.y = ys[0];
+
+    for (int i = 1; i <= steps; ++i) {
+        tos[i].type = CONTROL_EVENT_TYPE_MOUSE;
+        tos[i].mouse_event.action = AMOTION_EVENT_ACTION_MOVE;
+        tos[i].mouse_event.buttons = AMOTION_EVENT_BUTTON_PRIMARY;
+        tos[i].mouse_event.position.screen_size = screen_size;
+        tos[i].mouse_event.position.point.x = xs[i];
+        tos[i].mouse_event.position.point.y = ys[i];
+    }
+
+    tos[steps + 1].type = CONTROL_EVENT_TYPE_MOUSE;
+    tos[steps + 1].mouse_event.action = AMOTION_EVENT_ACTION_UP;
+    tos[steps + 1].mouse_event.buttons = AMOTION_EVENT_BUTTON_PRIMARY;
+    tos[steps + 1].mouse_event.position.screen_size = screen_size;
+    tos[steps + 1].mouse_event.position.point.x = xs[steps];
+    tos[steps + 1].mouse_event.position.point.y = ys[steps];
+
+    if (!controller_push_event(input_manager->controller, &to)) {
+        LOGW("Cannot send mouse motion event");
     }
 }
 
 void input_manager_process_key(struct input_manager *input_manager,
-                               const SDL_KeyboardEvent *event) {
+                               SDL_KeyboardEvent *event) {
+
     SDL_bool ctrl = event->keysym.mod & (KMOD_LCTRL | KMOD_RCTRL);
     SDL_bool alt = event->keysym.mod & (KMOD_LALT | KMOD_RALT);
     SDL_bool meta = event->keysym.mod & (KMOD_LGUI | KMOD_RGUI);
+    SDL_bool shift = event->keysym.mod & KMOD_SHIFT;
 
-    if (alt) {
-        // no shortcut involves Alt or Meta, and they should not be forwarded
-        // to the device
+    if (shift && event->keysym.sym == SDLK_INSERT)
+    {
+        if (!ctrl && !alt && !event->repeat && event->type == SDL_KEYDOWN) {
+            /* clipboard_paste(input_manager->controller); */
+            server_paste(input_manager->server);
+            action_paste(input_manager->controller, ACTION_DOWN);
+        }
         return;
     }
 
+    if (event->timestamp < timestamp + 10)
+    {
+        return;
+    }
+
+    if (ctrl && event->keysym.sym == SDLK_v)
+    {
+        if (!alt && !event->repeat && event->type == SDL_KEYDOWN) {
+            server_paste(input_manager->server);
+            action_paste(input_manager->controller, ACTION_DOWN);
+        }
+        return;
+    }
+
+    if (ctrl && event->keysym.sym == SDLK_c)
+    {
+        if (!alt && !event->repeat && event->type == SDL_KEYDOWN) {
+            system("androidclip");
+        }
+        return;
+    }
+
+    SDL_Keycode keycode = event->keysym.sym;
+    if (alt)
+    {
+        switch (keycode) {
+            case SDLK_h:
+                if (!ctrl && !event->repeat && event->type == SDL_KEYDOWN) {
+                    swipe(1, input_manager);
+                }
+                return;
+            case SDLK_l:
+                if (!ctrl && !event->repeat && event->type == SDL_KEYDOWN) {
+                    swipe(0, input_manager);
+                }
+                return;
+            case SDLK_j:
+                if (!ctrl && !event->repeat && event->type == SDL_KEYDOWN) {
+                    swipe(2, input_manager);
+                }
+                return;
+            case SDLK_k:
+                if (!ctrl && !event->repeat && event->type == SDL_KEYDOWN) {
+                    swipe(3, input_manager);
+                }
+                return;
+        }
+    }
+
+    int i = -1;
+    int action = event->type == SDL_KEYDOWN ? ACTION_DOWN : ACTION_UP;
+    SDL_bool repeat = event->repeat;
+    const unsigned char * data;
+    switch (keycode)
+    {
+        case SDLK_VOLUMEDOWN:
+            {
+                static unsigned char xx[4] = {0x02, 0x80, 0x02, 0x00};
+                if (send_hid_event(input_manager->handle, xx, 2))
+                    goto log_err;
+                if (send_hid_event(input_manager->handle, xx + 2, 2))
+                    goto log_err;
+            }
+            return;
+        case SDLK_VOLUMEUP:
+            {
+                static unsigned char xx[4] = {0x02, 0x40, 0x02, 0x00};
+                if (send_hid_event(input_manager->handle, xx, 2))
+                    goto log_err;
+                if (send_hid_event(input_manager->handle, xx + 2, 2))
+                    goto log_err;
+            }
+            return;
+        case SDLK_MUTE:
+            {
+                static unsigned char xx[4] = {0x02, 0x20, 0x02, 0x00};
+                if (send_hid_event(input_manager->handle, xx, 2))
+                    goto log_err;
+                if (send_hid_event(input_manager->handle, xx + 2, 2))
+                    goto log_err;
+            }
+            return;
+        case SDLK_AUDIOPLAY:
+            {
+                static unsigned char xx[4] = {0x02, 0x10, 0x02, 0x00};
+                if (send_hid_event(input_manager->handle, xx, 2))
+                    goto log_err;
+                if (send_hid_event(input_manager->handle, xx + 2, 2))
+                    goto log_err;
+            }
+            return;
+        case SDLK_AUDIOPREV:
+            {
+                static unsigned char xx[4] = {0x02, 0x02, 0x02, 0x00};
+                if (send_hid_event(input_manager->handle, xx, 2))
+                    goto log_err;
+                if (send_hid_event(input_manager->handle, xx + 2, 2))
+                    goto log_err;
+            }
+            return;
+        case SDLK_AUDIONEXT:
+            {
+                static unsigned char xx[4] = {0x02, 0x01, 0x02, 0x00};
+                if (send_hid_event(input_manager->handle, xx, 2))
+                    goto log_err;
+                if (send_hid_event(input_manager->handle, xx + 2, 2))
+                    goto log_err;
+            }
+            return;
+        case SDLK_ESCAPE:
+            action_back(input_manager->controller, action);
+            /* press_back_or_turn_screen_on(input_manager->controller); */
+            return;
+        case SDLK_RETURN:
+        case SDLK_BACKSPACE:
+        case SDLK_TAB:
+            data = key_press(keycode);
+            goto out2;
+    }
+
+    if (event->keysym.scancode == 53)
+    {
+        data = hid_shift_keys[40]; // shift-space
+        goto out2;
+    }
+
     // capture all Ctrl events
-    if (ctrl | meta) {
+    if (ctrl | alt) {
         SDL_bool shift = event->keysym.mod & (KMOD_LSHIFT | KMOD_RSHIFT);
         if (shift) {
             // currently, there is no shortcut involving SHIFT
             return;
         }
-
-        SDL_Keycode keycode = event->keysym.sym;
-        int action = event->type == SDL_KEYDOWN ? ACTION_DOWN : ACTION_UP;
-        SDL_bool repeat = event->repeat;
         switch (keycode) {
             case SDLK_h:
-                if (ctrl && !meta && !repeat) {
+                if (ctrl && !alt && !repeat) {
                     action_home(input_manager->controller, action);
                 }
                 return;
-            case SDLK_b: // fall-through
             case SDLK_BACKSPACE:
-                if (ctrl && !meta && !repeat) {
+                if (ctrl && !alt && !repeat) {
                     action_back(input_manager->controller, action);
                 }
                 return;
             case SDLK_s:
-                if (ctrl && !meta && !repeat) {
+                if (ctrl && !alt && !repeat) {
                     action_app_switch(input_manager->controller, action);
                 }
                 return;
             case SDLK_m:
-                if (ctrl && !meta && !repeat) {
+                if (ctrl && !alt && !repeat) {
                     action_menu(input_manager->controller, action);
                 }
                 return;
+            case SDLK_l:
+                if (ctrl && !alt && !repeat) {
+                    action_unlock(input_manager->controller, action);
+                }
+                return;
             case SDLK_p:
-                if (ctrl && !meta && !repeat) {
+                if (ctrl && !alt && !repeat) {
                     action_power(input_manager->controller, action);
                 }
                 return;
             case SDLK_DOWN:
-#ifdef __APPLE__
-                if (!ctrl && meta) {
-#else
-                if (ctrl && !meta) {
-#endif
+                if (ctrl && !alt) {
                     // forward repeated events
                     action_volume_down(input_manager->controller, action);
                 }
                 return;
             case SDLK_UP:
-#ifdef __APPLE__
-                if (!ctrl && meta) {
-#else
-                if (ctrl && !meta) {
-#endif
+                if (ctrl && !alt) {
                     // forward repeated events
                     action_volume_up(input_manager->controller, action);
                 }
                 return;
-            case SDLK_v:
-                if (ctrl && !meta && !repeat && event->type == SDL_KEYDOWN) {
-                    clipboard_paste(input_manager->controller);
-                }
-                return;
-            case SDLK_f:
-                if (ctrl && !meta && !repeat && event->type == SDL_KEYDOWN) {
-                    screen_switch_fullscreen(input_manager->screen);
-                }
-                return;
             case SDLK_x:
-                if (ctrl && !meta && !repeat && event->type == SDL_KEYDOWN) {
+                if (ctrl && !alt && !repeat && event->type == SDL_KEYDOWN) {
                     screen_resize_to_fit(input_manager->screen);
                 }
                 return;
             case SDLK_g:
-                if (ctrl && !meta && !repeat && event->type == SDL_KEYDOWN) {
+                if (ctrl && !alt && !repeat && event->type == SDL_KEYDOWN) {
                     screen_resize_to_pixel_perfect(input_manager->screen);
                 }
                 return;
             case SDLK_i:
-                if (ctrl && !meta && !repeat && event->type == SDL_KEYDOWN) {
-                    switch_fps_counter_state(input_manager->frames);
+                if (ctrl && !(alt && event->type == SDL_KEYDOWN)) {
+                    i = 39; // tab
+                    goto out;
                 }
-                return;
+            case SDLK_d:
+                if (ctrl && !(alt && event->type == SDL_KEYDOWN)) {
+                    i = 72; // delete
+                    goto out;
+                }
+            case SDLK_a:
+                if (ctrl && !(alt && event->type == SDL_KEYDOWN)) {
+                    i = 70; // home
+                    goto out;
+                }
+            case SDLK_e:
+                if (ctrl && !(alt && event->type == SDL_KEYDOWN)) {
+                    i = 73; // end
+                    goto out;
+                }
+            case SDLK_b:
+                if (ctrl && !(alt && event->type == SDL_KEYDOWN)) {
+                    i = 76; // left
+                    goto out;
+                }
+            case SDLK_f:
+                if (ctrl && !(alt && event->type == SDL_KEYDOWN)) {
+                    i = 75; // right
+                    goto out;
+                }
+            case SDLK_j:
+                if (ctrl && !(alt && event->type == SDL_KEYDOWN)) {
+                    i = 77; // down
+                    goto out;
+                }
+            case SDLK_k:
+                if (ctrl && !(alt && event->type == SDL_KEYDOWN)) {
+                    i = 78; // up
+                    goto out;
+                }
         }
-
         return;
     }
+    else if (keycode == SDLK_h || keycode == SDLK_j || keycode == SDLK_k || keycode == SDLK_l)
+    {
 
-    struct control_event control_event;
-    if (input_key_from_sdl_to_android(event, &control_event)) {
-        if (!controller_push_event(input_manager->controller, &control_event)) {
-            LOGW("Cannot send control event");
-        }
     }
+    else
+        return;
+
+out:
+    ;
+    if (i != -1)
+        data = hid_keys[i];
+    else
+    {
+        i = key_index(event->keysym.sym);
+    }
+    if (i == -1)
+    {
+        data = key_press(event->keysym.sym);
+    }
+    else
+    {
+        if (shift)
+            data = hid_shift_keys[i];
+        else
+            data = hid_keys[i];
+    }
+    /* printf("event->keysym.sym = %d\n", event->keysym.sym); */
+    /* printf("data = "); */
+    /* for (auto i = 0ul; i < 8; ++i) { */
+    /*     printf("%d ", data[i]); */
+    /* } */
+    /* printf("\n"); */
+    if (data == hid_keys_null)
+        return;
+out2:
+    if (event->type == SDL_KEYDOWN)
+    {
+        if (send_hid_event(input_manager->handle, data, HID_EVENT_SIZE))
+            goto log_err;
+    }
+    else
+    {
+        if (send_hid_event(input_manager->handle, data + 5, HID_EVENT_SIZE))
+            goto log_err;
+    }
+    return;
+log_err:
+    LOGW("Cannot send usb key event");
 }
 
 void input_manager_process_mouse_motion(struct input_manager *input_manager,

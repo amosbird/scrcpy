@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE
 #include "scrcpy.h"
 
 #include <stdio.h>
@@ -5,6 +6,10 @@
 #include <unistd.h>
 #include <libavformat/avformat.h>
 #include <sys/time.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <pthread.h>
 #include <SDL2/SDL.h>
 
 #include "command.h"
@@ -25,6 +30,8 @@
 #include "server.h"
 #include "tiny_xpm.h"
 
+volatile int quited = 0;
+
 static struct server server = SERVER_INITIALIZER;
 static struct screen screen = SCREEN_INITIALIZER;
 static struct frames frames;
@@ -37,6 +44,7 @@ static struct input_manager input_manager = {
     .controller = &controller,
     .frames = &frames,
     .screen = &screen,
+    .server = &server,
 };
 
 #if defined(__APPLE__) || defined(__WINDOWS__)
@@ -63,6 +71,17 @@ static SDL_bool is_apk(const char *file) {
     return ext && !strcmp(ext, ".apk");
 }
 
+// turn the screen on if it was off, press BACK otherwise
+static void encoder_control(struct controller *controller, int suspend) {
+    struct control_event control_event;
+    control_event.type = CONTROL_EVENT_TYPE_COMMAND;
+    control_event.command_event.action = suspend ? CONTROL_EVENT_SUSPEND_ENCODER : CONTROL_EVENT_RESUME_ENCODER;
+
+    if (!controller_push_event(controller, &control_event)) {
+        LOGW("Cannot control encoder");
+    }
+}
+
 static SDL_bool event_loop(void) {
 #ifdef CONTINUOUS_RESIZING_WORKAROUND
     SDL_AddEventWatch(event_watcher, NULL);
@@ -75,6 +94,7 @@ static SDL_bool event_loop(void) {
                 return SDL_FALSE;
             case SDL_QUIT:
                 LOGD("User requested to quit");
+                quited = 1;
                 return SDL_TRUE;
             case EVENT_NEW_FRAME:
                 if (!screen.has_frame) {
@@ -88,9 +108,18 @@ static SDL_bool event_loop(void) {
                 break;
             case SDL_WINDOWEVENT:
                 switch (event.window.event) {
+                    case SDL_WINDOWEVENT_FOCUS_GAINED:
+                        input_manager_enable_modifiers(event.window.timestamp);
+                        break;
                     case SDL_WINDOWEVENT_EXPOSED:
                     case SDL_WINDOWEVENT_SIZE_CHANGED:
                         screen_render(&screen);
+                        break;
+                    case SDL_WINDOWEVENT_HIDDEN:
+                        encoder_control(input_manager.controller, 1);
+                        break;
+                    case SDL_WINDOWEVENT_SHOWN:
+                        encoder_control(input_manager.controller, 0);
                         break;
                 }
                 break;
@@ -138,6 +167,89 @@ static void wait_show_touches(process_t process) {
     // reap the process, ignore the result
     process_check_success(process, "show_touches");
 }
+
+#define SOCK_PATH "/tmp/scrcpy.socket"
+
+static void handle(char c) {
+    SDL_Event sdlevent;
+    sdlevent.type = SDL_KEYUP;
+    switch (c) {
+        case 'z':
+            encoder_control(input_manager.controller, 0);
+            break;
+        case 'm':
+            sdlevent.key.keysym.sym = SDLK_MUTE;
+            SDL_PushEvent(&sdlevent);
+            break;
+        case 'u':
+            sdlevent.key.keysym.sym = SDLK_VOLUMEUP;
+            SDL_PushEvent(&sdlevent);
+            break;
+        case 'd':
+            sdlevent.key.keysym.sym = SDLK_VOLUMEDOWN;
+            SDL_PushEvent(&sdlevent);
+            break;
+        case 's':
+            sdlevent.key.keysym.sym = SDLK_AUDIOPLAY;
+            SDL_PushEvent(&sdlevent);
+            break;
+        case 'p':
+            sdlevent.key.keysym.sym = SDLK_AUDIOPREV;
+            SDL_PushEvent(&sdlevent);
+            break;
+        case 'n':
+            sdlevent.key.keysym.sym = SDLK_AUDIONEXT;
+            SDL_PushEvent(&sdlevent);
+            break;
+        case 'c':
+            // TODO
+            sdlevent.key.keysym.sym = SDLK_5;
+            SDL_PushEvent(&sdlevent);
+            break;
+    }
+}
+
+int s;
+static void* amos_handler(void* arg) {
+    int s2;
+    unsigned int t, len;
+    struct sockaddr_un local, remote;
+    char str[100];
+
+    if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+        perror("socket failed");
+        exit(1);
+    }
+
+    local.sun_family = AF_UNIX;
+    strcpy(local.sun_path, SOCK_PATH);
+    unlink(local.sun_path);
+    len = strlen(local.sun_path) + sizeof(local.sun_family);
+    if (bind(s, (struct sockaddr*)&local, len) == -1) {
+        perror("bind failed");
+        exit(1);
+    }
+
+    if (listen(s, 5) == -1) {
+        perror("listen failed");
+        exit(1);
+    }
+
+    for (;;) {
+        t = sizeof(remote);
+        if ((s2 = accept(s, (struct sockaddr*)&remote, &t)) == -1) {
+            perror("accept failed");
+            break;
+        }
+        int n = recv(s2, str, 100, 0);
+        if (n > 0)
+            handle(str[0]);
+        close(s2);
+    }
+
+    pthread_exit(NULL);
+}
+
 
 SDL_bool scrcpy(const struct scrcpy_options *options) {
     SDL_bool send_frame_meta = !!options->record_filename;
@@ -203,7 +315,7 @@ SDL_bool scrcpy(const struct scrcpy_options *options) {
         rec = &recorder;
     }
 
-    decoder_init(&decoder, &frames, device_socket, rec);
+    decoder_init(&decoder, &frames, &screen, device_socket, rec);
 
     // now we consumed the header values, the socket receives the video stream
     // start the decoder
@@ -228,6 +340,14 @@ SDL_bool scrcpy(const struct scrcpy_options *options) {
         goto finally_stop_and_join_controller;
     }
 
+    pthread_t handler;
+    {
+        if (pthread_create(&handler, NULL, amos_handler, NULL)) {
+            perror("pthread_create");
+            exit(1);
+        }
+    }
+
     if (options->show_touches) {
         wait_show_touches(proc_show_touches);
         show_touches_waited = SDL_TRUE;
@@ -237,10 +357,49 @@ SDL_bool scrcpy(const struct scrcpy_options *options) {
         screen_switch_fullscreen(&screen);
     }
 
+    libusb_init(NULL);
+    libusb_device* device = find_device(options->vid, options->pid);
+    if (!device) {
+        fprintf(stderr, "Device %04x:%04x not found\n", options->vid, options->pid);
+        exit(1);
+    }
+    printf("Device %04x:%04x found. Opening...\n", options->vid, options->pid);
+
+    int r = libusb_open(device, &input_manager.handle);
+    if (r) {
+        print_libusb_error(r);
+        libusb_unref_device(device);
+        exit(1);
+    }
+
+    printf("Registering HID...\n");
+    if (register_hid(input_manager.handle, REPORT_DESC_SIZE))
+    {
+        printf("Registering HID failed\n");
+        exit(1);
+    }
+
+    struct libusb_device_descriptor desc;
+    libusb_get_device_descriptor(device, &desc);
+    int max_packet_size_0 = desc.bMaxPacketSize0;
+
+    printf("Sending HID descriptor...\n");
+    if (send_hid_descriptor(input_manager.handle, REPORT_DESC, REPORT_DESC_SIZE, max_packet_size_0))
+    {
+        printf("Sending HID descriptor failed\n");
+        exit(1);
+    }
+
+    // an event sent too early after the HID descriptor may fail
+    usleep(1000000);
+
     ret = event_loop();
     LOGD("quit...");
 
     screen_destroy(&screen);
+
+    shutdown(s, SHUT_RD);
+    pthread_join(handler, NULL);
 
 finally_stop_and_join_controller:
     controller_stop(&controller);

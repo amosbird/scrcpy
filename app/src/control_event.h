@@ -18,9 +18,12 @@ enum control_event_type {
     CONTROL_EVENT_TYPE_MOUSE,
     CONTROL_EVENT_TYPE_SCROLL,
     CONTROL_EVENT_TYPE_COMMAND,
+    CONTROL_EVENT_TYPE_SWIPE,
 };
 
 #define CONTROL_EVENT_COMMAND_BACK_OR_SCREEN_ON 0
+#define CONTROL_EVENT_SUSPEND_ENCODER 1
+#define CONTROL_EVENT_RESUME_ENCODER 2
 
 struct control_event {
     enum control_event_type type;
@@ -46,6 +49,11 @@ struct control_event {
         struct {
             int action;
         } command_event;
+        struct {
+            struct control_event* events;
+            int time;
+            int num;
+        } swipe_event;
     };
 };
 
