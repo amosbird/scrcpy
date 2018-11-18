@@ -56,6 +56,22 @@ static void send_keycode(struct controller *controller, enum android_keycode key
     }
 }
 
+static inline void action_call(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_HEADSETHOOK, actions, "HEADSETHOOK");
+}
+
+static inline void action_play(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_MEDIA_PLAY_PAUSE, actions, "PLAY");
+}
+
+static inline void action_next(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_MEDIA_NEXT, actions, "NEXT");
+}
+
+static inline void action_prev(struct controller *controller, int actions) {
+    send_keycode(controller, AKEYCODE_MEDIA_PREVIOUS, actions, "PREV");
+}
+
 static inline void action_home(struct controller *controller, int actions) {
     send_keycode(controller, AKEYCODE_HOME, actions, "HOME");
 }
@@ -151,6 +167,23 @@ void input_manager_process_text_input(struct input_manager *input_manager,
 void input_manager_process_key(struct input_manager *input_manager,
                                SDL_KeyboardEvent *event) {
     SDL_bool ctrl = event->keysym.mod & (KMOD_LCTRL | KMOD_RCTRL);
+    SDL_bool alt = event->keysym.mod & (KMOD_LALT | KMOD_RALT);
+    SDL_bool meta = event->keysym.mod & (KMOD_LGUI | KMOD_RGUI);
+    SDL_bool shift = event->keysym.mod & KMOD_SHIFT;
+
+    if (shift && event->keysym.sym == SDLK_INSERT)
+    {
+        if (!ctrl && !meta && !event->repeat && event->type == SDL_KEYDOWN) {
+            clipboard_paste(input_manager->controller);
+        }
+        return;
+    }
+
+    if (alt) {
+        // no shortcut involves Alt or Meta, and they should not be forwarded
+        // to the device
+        return;
+    }
 
     // capture all Ctrl events
     if (ctrl) {
@@ -164,12 +197,31 @@ void input_manager_process_key(struct input_manager *input_manager,
         int action = event->type == SDL_KEYDOWN ? ACTION_DOWN : ACTION_UP;
         SDL_bool repeat = event->repeat;
         switch (keycode) {
+            case SDLK_2:
+                if (ctrl && !meta && !repeat) {
+                    action_play(input_manager->controller, action);
+                }
+                return;
+            case SDLK_3:
+                if (ctrl && !meta && !repeat) {
+                    action_prev(input_manager->controller, action);
+                }
+                return;
+            case SDLK_4:
+                if (ctrl && !meta && !repeat) {
+                    action_next(input_manager->controller, action);
+                }
+                return;
+            case SDLK_5:
+                if (ctrl && !meta && !repeat) {
+                    action_call(input_manager->controller, action);
+                }
+                return;
             case SDLK_h:
                 if (!repeat) {
                     action_home(input_manager->controller, action);
                 }
                 return;
-            case SDLK_b: // fall-through
             case SDLK_BACKSPACE:
                 if (!repeat) {
                     action_back(input_manager->controller, action);
@@ -198,44 +250,76 @@ void input_manager_process_key(struct input_manager *input_manager,
                 // forward repeated events
                 action_volume_up(input_manager->controller, action);
                 return;
-            case SDLK_v:
-                if (ctrl && !meta && !repeat) {
-                    clipboard_paste(input_manager->controller);
-                }
-                return;
-            case SDLK_f:
-                if (ctrl && !meta && !repeat) {
-                    screen_switch_fullscreen(input_manager->screen);
-                }
-                return;
             case SDLK_x:
-                if (ctrl && !meta && !repeat) {
+                if (ctrl && !meta && !repeat && event->type == SDL_KEYDOWN) {
                     screen_resize_to_fit(input_manager->screen);
                 }
                 return;
             case SDLK_g:
-                if (ctrl && !meta && !repeat) {
+                if (ctrl && !meta && !repeat && event->type == SDL_KEYDOWN) {
                     screen_resize_to_pixel_perfect(input_manager->screen);
                 }
                 return;
             case SDLK_i:
-                if (ctrl && !meta && !repeat) {
+                if (ctrl && !meta && !repeat && event->type == SDL_KEYDOWN) {
                     switch_fps_counter_state(input_manager->frames);
                 }
                 return;
+            case SDLK_d:
+                if (ctrl && !meta) {
+                    event->keysym.mod = 0;
+                    event->keysym.sym = SDLK_DELETE;
+                    goto out;
+                }
+            case SDLK_a:
+                if (ctrl && !meta) {
+                    event->keysym.mod = 0;
+                    event->keysym.sym = SDLK_HOME;
+                    goto out;
+                }
+            case SDLK_e:
+                if (ctrl && !meta) {
+                    event->keysym.mod = 0;
+                    event->keysym.sym = SDLK_END;
+                    goto out;
+                }
+            case SDLK_b:
+                if (ctrl && !meta) {
+                    event->keysym.mod = 0;
+                    event->keysym.sym = SDLK_LEFT;
+                    goto out;
+                }
+            case SDLK_f:
+                if (ctrl && !meta) {
+                    event->keysym.mod = 0;
+                    event->keysym.sym = SDLK_RIGHT;
+                    goto out;
+                }
+            case SDLK_j:
+                if (ctrl && !meta) {
+                    event->keysym.mod = 0;
+                    event->keysym.sym = SDLK_DOWN;
+                    goto out;
+                }
+            case SDLK_k:
+                if (ctrl && !meta) {
+                    event->keysym.mod = 0;
+                    event->keysym.sym = SDLK_UP;
+                    goto out;
+                }
         }
 
         return;
     }
 
-    struct control_event control_event;
-    event->type = SDL_KEYDOWN;
-    if (input_key_from_sdl_to_android(event, &control_event)) {
-        if (!controller_push_event(input_manager->controller, &control_event)) {
-            LOGW("Cannot send control event");
-        }
+    if (event->keysym.sym == 1073741824)
+    {
+        event->keysym.mod = KMOD_LSHIFT;
+        event->keysym.sym = SDLK_SPACE;
     }
-    event->type = SDL_KEYUP;
+out:
+    ;
+    struct control_event control_event;
     if (input_key_from_sdl_to_android(event, &control_event)) {
         if (!controller_push_event(input_manager->controller, &control_event)) {
             LOGW("Cannot send control event");

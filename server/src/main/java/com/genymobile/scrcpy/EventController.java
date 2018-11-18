@@ -17,6 +17,7 @@ public class EventController {
 
     private final Device device;
     private final DesktopConnection connection;
+    private final ScreenEncoder encoder;
 
     private final KeyCharacterMap charMap = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
 
@@ -24,9 +25,10 @@ public class EventController {
     private final MotionEvent.PointerProperties[] pointerProperties = {new MotionEvent.PointerProperties()};
     private final MotionEvent.PointerCoords[] pointerCoords = {new MotionEvent.PointerCoords()};
 
-    public EventController(Device device, DesktopConnection connection) {
+    public EventController(Device device, DesktopConnection connection, ScreenEncoder encoder) {
         this.device = device;
         this.connection = connection;
+        this.encoder = encoder;
         initPointer();
     }
 
@@ -172,6 +174,10 @@ public class EventController {
         switch (action) {
             case ControlEvent.COMMAND_BACK_OR_SCREEN_ON:
                 return pressBackOrTurnScreenOn();
+            case ControlEvent.SUSPEND_ENCODER:
+                return encoder.setSuspend(true);
+            case ControlEvent.RESUME_ENCODER:
+                return encoder.setSuspend(false);
             default:
                 Ln.w("Unsupported command: " + action);
         }

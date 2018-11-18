@@ -222,6 +222,14 @@ static SDL_bool prepare_for_frame(struct screen *screen, struct size new_frame_s
         target_size = get_optimal_size(target_size, new_frame_size);
         set_window_size(screen, target_size);
 
+        if (!screen->fullscreen) {
+            SDL_DisplayMode DM;
+            SDL_GetCurrentDisplayMode(0, &DM);
+            int x = DM.w / 2 - target_size.width / 2;
+            int y = DM.h / 2 - target_size.height / 2;
+            SDL_SetWindowPosition(screen->window, x, y);
+        }
+
         screen->frame_size = new_frame_size;
 
         LOGD("New texture: %" PRIu16 "x%" PRIu16,

@@ -55,7 +55,8 @@ static int get_matching_audio_device(const char *serial, int count) {
     for (int i = count - 1; i >= 0; i--) {
         // model is a NUL-terminated string
         const char *name = SDL_GetAudioDeviceName(i, 1);
-        if (strstr(name, model)) {
+        LOGD("Device name is: %s", name);
+        if (strstr(name, model) || strstr(name, "SDM636-MTP _SN:95743F4E")) {
             // the device name contains the device model, we found it!
             return i;
         }

@@ -9,8 +9,11 @@
 #include "config.h"
 #include "events.h"
 #include "frames.h"
+#include "screen.h"
 #include "lock_util.h"
 #include "log.h"
+
+extern volatile int quited;
 
 #define BUFSIZE 0x10000
 
@@ -129,6 +132,11 @@ static int run_decoder(void *data) {
         if (avio_ctx->eof_reached) {
             break;
         }
+        /* while (!(SDL_GetWindowFlags(decoder->screen->window) & SDL_WINDOW_SHOWN)) { */
+        /*     sleep(1); */
+        /*     if (quited) */
+        /*         goto run_quit; */
+        /* } */
     }
 
     LOGD("End of frames");
@@ -148,8 +156,9 @@ run_end:
     return 0;
 }
 
-void decoder_init(struct decoder *decoder, struct frames *frames, socket_t video_socket) {
+void decoder_init(struct decoder *decoder, struct frames *frames, struct screen *screen, socket_t video_socket) {
     decoder->frames = frames;
+    decoder->screen = screen;
     decoder->video_socket = video_socket;
 }
 

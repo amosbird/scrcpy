@@ -21,6 +21,8 @@ enum control_event_type {
 };
 
 #define CONTROL_EVENT_COMMAND_BACK_OR_SCREEN_ON 0
+#define CONTROL_EVENT_SUSPEND_ENCODER 1
+#define CONTROL_EVENT_RESUME_ENCODER 2
 
 struct control_event {
     enum control_event_type type;

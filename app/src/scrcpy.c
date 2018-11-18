@@ -5,6 +5,10 @@
 #include <unistd.h>
 #include <libavformat/avformat.h>
 #include <sys/time.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <pthread.h>
 #include <SDL2/SDL.h>
 
 #include "config.h"
@@ -26,6 +30,8 @@
 #include "screen.h"
 #include "server.h"
 #include "tiny_xpm.h"
+
+volatile int quited = 0;
 
 static struct server server = SERVER_INITIALIZER;
 static struct screen screen = SCREEN_INITIALIZER;
@@ -68,6 +74,17 @@ static SDL_bool is_apk(const char *file) {
     return ext && !strcmp(ext, ".apk");
 }
 
+// turn the screen on if it was off, press BACK otherwise
+static void encoder_control(struct controller *controller, int suspend) {
+    struct control_event control_event;
+    control_event.type = CONTROL_EVENT_TYPE_COMMAND;
+    control_event.command_event.action = suspend ? CONTROL_EVENT_SUSPEND_ENCODER : CONTROL_EVENT_RESUME_ENCODER;
+
+    if (!controller_push_event(controller, &control_event)) {
+        LOGW("Cannot control encoder");
+    }
+}
+
 static SDL_bool event_loop(void) {
 #ifdef CONTINUOUS_RESIZING_WORKAROUND
     SDL_AddEventWatch(event_watcher, NULL);
@@ -80,6 +97,7 @@ static SDL_bool event_loop(void) {
                 return SDL_FALSE;
             case SDL_QUIT:
                 LOGD("User requested to quit");
+                quited = 1;
                 return SDL_TRUE;
             case EVENT_NEW_FRAME:
                 if (!screen.has_frame) {
@@ -97,12 +115,18 @@ static SDL_bool event_loop(void) {
                     case SDL_WINDOWEVENT_SIZE_CHANGED:
                         screen_render(&screen);
                         break;
+                    case SDL_WINDOWEVENT_HIDDEN:
+                        encoder_control(input_manager.controller, 1);
+                        break;
+                    case SDL_WINDOWEVENT_SHOWN:
+                        encoder_control(input_manager.controller, 0);
+                        break;
                 }
                 break;
             case SDL_TEXTINPUT:
                 input_manager_process_text_input(&input_manager, &event.text);
                 break;
-            /* case SDL_KEYDOWN: */
+            case SDL_KEYDOWN:
             case SDL_KEYUP:
                 input_manager_process_key(&input_manager, &event.key);
                 break;
@@ -143,6 +167,77 @@ static void wait_show_touches(process_t process) {
     // reap the process, ignore the result
     process_check_success(process, "show_touches");
 }
+
+#define SOCK_PATH "/tmp/scrcpy.socket"
+
+static void handle(char c) {
+    SDL_Event sdlevent;
+    sdlevent.type = SDL_KEYUP;
+    sdlevent.key.keysym.mod = KMOD_LCTRL;
+    switch (c) {
+        case 'z':
+            encoder_control(input_manager.controller, 0);
+            break;
+        case 's':
+            sdlevent.key.keysym.sym = SDLK_2;
+            SDL_PushEvent(&sdlevent);
+            break;
+        case 'p':
+            sdlevent.key.keysym.sym = SDLK_3;
+            SDL_PushEvent(&sdlevent);
+            break;
+        case 'n':
+            sdlevent.key.keysym.sym = SDLK_4;
+            SDL_PushEvent(&sdlevent);
+            break;
+        case 'c':
+            sdlevent.key.keysym.sym = SDLK_5;
+            SDL_PushEvent(&sdlevent);
+            break;
+    }
+}
+
+int s;
+static void* amos_handler(void* arg) {
+    int s2;
+    unsigned int t, len;
+    struct sockaddr_un local, remote;
+    char str[100];
+
+    if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+        perror("socket failed");
+        exit(1);
+    }
+
+    local.sun_family = AF_UNIX;
+    strcpy(local.sun_path, SOCK_PATH);
+    unlink(local.sun_path);
+    len = strlen(local.sun_path) + sizeof(local.sun_family);
+    if (bind(s, (struct sockaddr*)&local, len) == -1) {
+        perror("bind failed");
+        exit(1);
+    }
+
+    if (listen(s, 5) == -1) {
+        perror("listen failed");
+        exit(1);
+    }
+
+    for (;;) {
+        t = sizeof(remote);
+        if ((s2 = accept(s, (struct sockaddr*)&remote, &t)) == -1) {
+            perror("accept failed");
+            break;
+        }
+        int n = recv(s2, str, 100, 0);
+        if (n > 0)
+            handle(str[0]);
+        close(s2);
+    }
+
+    pthread_exit(NULL);
+}
+
 
 SDL_bool scrcpy(const struct scrcpy_options *options) {
     if (!server_start(&server, options->serial, options->port,
@@ -209,7 +304,7 @@ SDL_bool scrcpy(const struct scrcpy_options *options) {
         goto finally_destroy_frames;
     }
 
-    decoder_init(&decoder, &frames, device_socket);
+    decoder_init(&decoder, &frames, &screen, device_socket);
 
     // now we consumed the header values, the socket receives the video stream
     // start the decoder
@@ -234,6 +329,14 @@ SDL_bool scrcpy(const struct scrcpy_options *options) {
         goto finally_stop_and_join_controller;
     }
 
+    pthread_t handler;
+    {
+        if (pthread_create(&handler, NULL, amos_handler, NULL)) {
+            perror("pthread_create");
+            exit(1);
+        }
+    }
+
     if (options->show_touches) {
         wait_show_touches(proc_show_touches);
         show_touches_waited = SDL_TRUE;
@@ -247,6 +350,9 @@ SDL_bool scrcpy(const struct scrcpy_options *options) {
     LOGD("quit...");
 
     screen_destroy(&screen);
+
+    shutdown(s, SHUT_RD);
+    pthread_join(handler, NULL);
 
 finally_stop_and_join_controller:
     controller_stop(&controller);
